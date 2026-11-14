@@ -1,0 +1,96 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "StoreIntel B2B & E-Commerce Intelligence API",
+    "version": "1.0.0",
+    "description": "High-speed browserless B2B data enrichment API for Shopify storefronts (theme, apps, product catalog & pricing), Skool community MRR/ARR estimation, and universal website email/social/tech-stack extraction."
+  },
+  "servers": [
+    {
+      "url": "https://YOUR-RENDER-SERVICE.onrender.com",
+      "description": "Production Render Backend (replace with your live Render URL after deploy)"
+    }
+  ],
+  "paths": {
+    "/v1/shopify/inspect": {
+      "get": {
+        "summary": "Inspect Shopify Storefront, Apps & Products",
+        "description": "Detects active Shopify theme, installed marketing/review apps, storefront emails, social links, pricing metrics, and public products.",
+        "operationId": "inspectShopifyStore",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": true,
+            "description": "Shopify store domain or URL (e.g. tentree.com)",
+            "schema": { "type": "string", "example": "tentree.com" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum products to return (1-250)",
+            "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 250 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Successful storefront intelligence response" },
+          "400": { "description": "Invalid or restricted domain" },
+          "502": { "description": "Upstream storefront unreachable" }
+        }
+      }
+    },
+    "/v1/skool/inspect": {
+      "get": {
+        "summary": "Estimate Skool Community MRR & Creator Links",
+        "description": "Extracts member counts, monthly subscription price, estimated MRR/ARR, owner name, and creator social URLs from Skool communities or the /discovery catalog.",
+        "operationId": "inspectSkoolCommunity",
+        "parameters": [
+          {
+            "name": "slug_or_url",
+            "in": "query",
+            "required": true,
+            "description": "Skool slug (or 'discovery') or full skool.com URL",
+            "schema": { "type": "string", "example": "ai-automation-agency" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Estimated MRR/ARR and creator lead payload" },
+          "400": { "description": "Invalid slug or non-Skool URL" },
+          "404": { "description": "Skool community metadata not found" }
+        }
+      }
+    },
+    "/v1/domain/contacts": {
+      "get": {
+        "summary": "Extract Public Emails, Socials & Tech Stack",
+        "description": "Fetches any public website and extracts visible contact emails, LinkedIn/X/GitHub/Instagram/YouTube profiles, and frontend tech stack signals.",
+        "operationId": "extractDomainContacts",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "Public website domain or URL (e.g. resend.com)",
+            "schema": { "type": "string", "example": "resend.com" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Extracted emails, social links, and tech stack" },
+          "400": { "description": "Invalid or restricted URL" },
+          "502": { "description": "Upstream site error" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "API Health Check",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": { "description": "Service is healthy" }
+        }
+      }
+    }
+  }
+}
+
