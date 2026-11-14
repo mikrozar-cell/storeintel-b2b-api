@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "StoreIntel B2B & E-Commerce Intelligence API",
-    "version": "1.0.0",
-    "description": "High-speed browserless B2B data enrichment API for Shopify storefronts (theme, apps, product catalog & pricing), Skool community MRR/ARR estimation, and universal website email/social/tech-stack extraction."
+    "version": "2.0.0",
+    "description": "Complete browserless B2B data enrichment API covering Shopify storefronts, Shopify App Store 1-star churn leads, Skool community MRR/ARR, website contacts & tech stacks, Greenhouse/Lever/Ashby jobs, Y Combinator founders, WordPress plugins, and Substack engagement."
   },
   "servers": [
     {
@@ -37,6 +37,40 @@
           "200": { "description": "Successful storefront intelligence response" },
           "400": { "description": "Invalid or restricted domain" },
           "502": { "description": "Upstream storefront unreachable" }
+        }
+      }
+    },
+    "/v1/shopify/app-reviews": {
+      "get": {
+        "summary": "Extract Shopify App 1-Star Churn Leads",
+        "description": "Scrapes competitor Shopify App Store reviews filtered by star rating (1-5) and classifies merchant pain points.",
+        "operationId": "getShopifyAppReviews",
+        "parameters": [
+          {
+            "name": "app_slug",
+            "in": "query",
+            "required": true,
+            "description": "Shopify App handle or apps.shopify.com URL (e.g. klaviyo-email-marketing)",
+            "schema": { "type": "string", "example": "klaviyo-email-marketing" }
+          },
+          {
+            "name": "rating",
+            "in": "query",
+            "required": false,
+            "description": "Star rating filter (1 = 1-star churn leads)",
+            "schema": { "type": "integer", "default": 1, "minimum": 1, "maximum": 5 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum reviews to return (1-50)",
+            "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 50 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Extracted merchant reviews & churn leads" },
+          "400": { "description": "Invalid app handle" }
         }
       }
     },
@@ -82,6 +116,100 @@
         }
       }
     },
+    "/v1/ats/jobs": {
+      "get": {
+        "summary": "Fetch Greenhouse, Lever & Ashby Jobs + Tech Stack",
+        "description": "Queries public ATS job boards (Greenhouse, Lever, AshbyHQ) to extract open roles, salary ranges, and hiring B2B tech stack signals.",
+        "operationId": "inspectAtsJobs",
+        "parameters": [
+          {
+            "name": "board_url",
+            "in": "query",
+            "required": true,
+            "description": "ATS job board URL or company slug (e.g. https://boards.greenhouse.io/stripe)",
+            "schema": { "type": "string", "example": "https://boards.greenhouse.io/stripe" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum job postings to return (1-50)",
+            "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 50 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Normalized ATS jobs & aggregated tech stack signals" },
+          "404": { "description": "Job board not found" }
+        }
+      }
+    },
+    "/v1/yc/company": {
+      "get": {
+        "summary": "Extract Y Combinator Startup & Founders LinkedIn/X",
+        "description": "Fetches Y Combinator startup batch, team size, website, tags, and individual founders with LinkedIn and X/Twitter URLs.",
+        "operationId": "inspectYcCompany",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "query",
+            "required": true,
+            "description": "Y Combinator company slug or URL (e.g. supabase, stripe)",
+            "schema": { "type": "string", "example": "supabase" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "YC startup and founder social profiles" },
+          "404": { "description": "YC company not found" }
+        }
+      }
+    },
+    "/v1/wordpress/plugin": {
+      "get": {
+        "summary": "Inspect WordPress Plugin Installs, Rating & Support",
+        "description": "Queries the official WordPress.org Plugin API for active installs, downloads, support thread resolution rate, and commercial links.",
+        "operationId": "inspectWordPressPlugin",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "query",
+            "required": true,
+            "description": "WordPress plugin slug or URL (e.g. woocommerce)",
+            "schema": { "type": "string", "example": "woocommerce" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "WordPress plugin intelligence metrics" },
+          "404": { "description": "Plugin not found" }
+        }
+      }
+    },
+    "/v1/substack/posts": {
+      "get": {
+        "summary": "Fetch Substack Author, Engagement & Recent Posts",
+        "description": "Queries public Substack publication archives to calculate average reactions/comments and return author bio, X handle, and recent posts.",
+        "operationId": "inspectSubstackPosts",
+        "parameters": [
+          {
+            "name": "subdomain",
+            "in": "query",
+            "required": true,
+            "description": "Substack subdomain or custom URL (e.g. pragmaticengineer)",
+            "schema": { "type": "string", "example": "pragmaticengineer" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum recent posts to return (1-25)",
+            "schema": { "type": "integer", "default": 10, "minimum": 1, "maximum": 25 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Substack engagement averages and post list" },
+          "404": { "description": "Publication archive not found" }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "API Health Check",
@@ -93,4 +221,3 @@
     }
   }
 }
-

@@ -1,13 +1,21 @@
-"""StoreIntel B2B Intelligence REST API for RapidAPI Hub & Render.
+"""StoreIntel B2B & E-Commerce Intelligence REST API for RapidAPI Hub & Render.
 
-Provides four browserless, high-speed endpoints:
+Exposes all 8 browserless StoreIntel intelligence engines + system endpoints:
+- GET /
 - GET /health
 - GET /v1/shopify/inspect
+- GET /v1/shopify/app-reviews
 - GET /v1/skool/inspect
 - GET /v1/domain/contacts
+- GET /v1/ats/jobs
+- GET /v1/yc/company
+- GET /v1/wordpress/plugin
+- GET /v1/substack/posts
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from html import unescape
 import ipaddress
 import json
 import os
@@ -23,8 +31,8 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
-REQUEST_TIMEOUT_SEC = 15.0
-MAX_HTML_BYTES = 2_000_000
+REQUEST_TIMEOUT_SEC = 18.0
+MAX_HTML_BYTES = 2_500_000
 
 EMAIL_RX = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 IGNORED_EMAIL_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".css", ".js", ".woff", ".woff2")
@@ -47,7 +55,7 @@ SHOPIFY_APP_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Google Analytics 4", re.compile(r"googletagmanager\.com", re.I)),
 )
 
-TECH_STACK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+WEB_STACK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Next.js", re.compile(r"__NEXT_DATA__|_next/static", re.I)),
     ("React", re.compile(r"data-reactroot|__reactContainer", re.I)),
     ("Shopify", re.compile(r"cdn\.shopify\.com|Shopify\.theme", re.I)),
@@ -63,6 +71,43 @@ TECH_STACK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Google Analytics 4", re.compile(r"googletagmanager\.com", re.I)),
 )
 
+ATS_STACK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("AWS", re.compile(r"\b(AWS|Amazon Web Services|EC2|S3|ECS|EKS|Lambda)\b")),
+    ("GCP", re.compile(r"\b(GCP|Google Cloud Platform|BigQuery|GKE|Vertex AI)\b")),
+    ("Azure", re.compile(r"\b(Azure|Microsoft Azure|AKS)\b")),
+    ("Snowflake", re.compile(r"\bSnowflake\b", re.I)),
+    ("Databricks", re.compile(r"\bDatabricks\b", re.I)),
+    ("dbt", re.compile(r"\bdbt\b")),
+    ("Kubernetes", re.compile(r"\b(Kubernetes|K8s)\b", re.I)),
+    ("Terraform", re.compile(r"\bTerraform\b", re.I)),
+    ("Datadog", re.compile(r"\bDatadog\b", re.I)),
+    ("Sentry", re.compile(r"\bSentry\b", re.I)),
+    ("Salesforce", re.compile(r"\b(Salesforce|SFDC)\b", re.I)),
+    ("HubSpot", re.compile(r"\bHubSpot\b", re.I)),
+    ("Stripe", re.compile(r"\bStripe\b")),
+    ("OpenAI", re.compile(r"\b(OpenAI|GPT-4|ChatGPT)\b", re.I)),
+    ("Anthropic", re.compile(r"\b(Anthropic|Claude)\b")),
+    ("Python", re.compile(r"\bPython\b")),
+    ("TypeScript", re.compile(r"\bTypeScript\b", re.I)),
+    ("React", re.compile(r"\b(React|Next\.js|ReactJS)\b")),
+    ("Go", re.compile(r"\b(Golang|Go language)\b", re.I)),
+    ("Rust", re.compile(r"\bRust\b")),
+    ("PostgreSQL", re.compile(r"\b(PostgreSQL|Postgres)\b", re.I)),
+)
+
+PAIN_POINT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("pricing_billing", re.compile(r"\b(expensive|overpriced|price|pricing|charged|billing|refund|subscription|fee)\b", re.I)),
+    ("customer_support", re.compile(r"\b(support|customer service|no response|unhelpful|rude|ignored|ticket|reply)\b", re.I)),
+    ("bugs_reliability", re.compile(r"\b(bug|bugs|broken|crash|error|glitch|not working|stopped working|issue|failed)\b", re.I)),
+    ("performance_speed", re.compile(r"\b(slow|slowed|speed|lag|loading|page speed|heavy)\b", re.I)),
+    ("missing_features", re.compile(r"\b(missing|lack|lacks|limited|basic|no option|limitation)\b", re.I)),
+    ("usability_setup", re.compile(r"\b(complicated|confusing|hard to use|difficult|setup|install|clunky|ux|ui)\b", re.I)),
+)
+
+SALARY_RANGE_RE = re.compile(
+    r"\$\s*(\d{2,3}(?:,\d{3})+|\d{2,3}\s*[kK])\s*(?:-|–|—|to)\s*\$\s*(\d{2,3}(?:,\d{3})+|\d{2,3}\s*[kK])"
+)
+
 SOCIAL_EXTRACTORS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("linkedin", re.compile(r"https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9._%\-/]+", re.I)),
     ("twitter_x", re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/(?!share\b|intent\b)[a-zA-Z0-9_]{1,30}", re.I)),
@@ -72,11 +117,12 @@ SOCIAL_EXTRACTORS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 app = FastAPI(
-    title="StoreIntel B2B Intelligence API",
-    version="1.0.0",
+    title="StoreIntel B2B & E-Commerce Intelligence API",
+    version="2.0.0",
     description=(
-        "Browserless REST API for inspecting Shopify storefronts, estimating Skool community MRR, "
-        "and extracting verified public emails, social profiles, and tech stacks from any domain."
+        "Complete suite of 8 browserless B2B data enrichment endpoints: Shopify stores, "
+        "Shopify App Store 1-star churn leads, Skool community MRR, universal website contacts/tech stack, "
+        "Greenhouse/Lever/Ashby ATS jobs, Y Combinator founders, WordPress plugins, and Substack engagement."
     ),
 )
 
@@ -134,6 +180,37 @@ async def _safe_get(url: str, max_redirects: int = 3) -> httpx.Response:
             return resp
 
     raise HTTPException(status_code=502, detail="Too many redirects from target domain.")
+
+
+def _safe_slug(raw: str, strip_prefix: str = "") -> str:
+    s = (raw or "").strip()
+    if "://" in s or "/" in s:
+        if "://" not in s:
+            s = "https://" + s
+        parts = [p for p in urlparse(s).path.split("/") if p]
+        if strip_prefix and strip_prefix in parts:
+            idx = parts.index(strip_prefix)
+            s = parts[idx + 1] if idx + 1 < len(parts) else (parts[-1] if parts else "")
+        else:
+            s = parts[0] if parts else ""
+    s = s.split("?")[0].split("#")[0].lower().strip("/")
+    if not s or not re.fullmatch(r"[a-z0-9._\-]{1,120}", s):
+        raise HTTPException(status_code=400, detail="Invalid slug or URL format.")
+    return s
+
+
+def _clean_html_text(raw_html: str | None) -> str:
+    if not raw_html:
+        return ""
+    txt = unescape(raw_html)
+    txt = re.sub(r"<[^>]+>", " ", txt)
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _detect_patterns(text: str, patterns: tuple[tuple[str, re.Pattern[str]], ...]) -> list[str]:
+    if not text:
+        return []
+    return [name for name, rx in patterns if rx.search(text)]
 
 
 def _extract_emails_and_socials(html: str) -> tuple[list[str], dict[str, list[str]]]:
@@ -219,23 +296,85 @@ def _extract_skool_group(group: dict[str, Any], fallback_url: str) -> dict[str, 
     }
 
 
+def _parse_shopify_app_reviews(html: str, app_handle: str, limit: int) -> list[dict[str, Any]]:
+    chunks = html.split("data-merchant-review")
+    if len(chunks) <= 1:
+        return []
+
+    reviews: list[dict[str, Any]] = []
+    for chunk in chunks[1:]:
+        id_match = re.search(r'data-review-(?:content-)?id="([^"]+)"', chunk)
+        star_match = re.search(r'aria-label="(\d)\s+out of 5 stars"', chunk)
+        copy_match = re.search(r'data-truncate-content-copy[^>]*>(.*?)</div>', chunk, re.S)
+        date_match = re.search(r"([A-Z][a-z]+\s+\d{1,2},\s+\d{4})", chunk)
+        merchant_match = re.search(r'tw-order-1.*?<span[^>]*title="([^"]+)"', chunk, re.S)
+        if not merchant_match:
+            merchant_match = re.search(r'tw-order-1.*?tw-text-heading-xs[^>]*>(.*?)</', chunk, re.S)
+
+        usage_match = re.search(r">([^<]*(?:using the app|free plan)[^<]*)<", chunk, re.I)
+        review_text = _clean_html_text(copy_match.group(1)) if copy_match else ""
+        if not review_text and not merchant_match:
+            continue
+
+        reviews.append({
+            "app_handle": app_handle,
+            "review_id": id_match.group(1) if id_match else "",
+            "rating": int(star_match.group(1)) if star_match else None,
+            "merchant_store": unescape(merchant_match.group(1)).strip() if merchant_match else "Shopify Merchant",
+            "usage_duration": _clean_html_text(usage_match.group(1)) if usage_match else "",
+            "published_at": date_match.group(1) if date_match else "",
+            "pain_points": _detect_patterns(review_text, PAIN_POINT_PATTERNS),
+            "review_text": review_text[:800],
+        })
+        if len(reviews) >= limit:
+            break
+    return reviews
+
+
+def _extract_salary(text: str) -> str | None:
+    if not text:
+        return None
+    m = SALARY_RANGE_RE.search(text)
+    if not m:
+        return None
+    try:
+        vals = []
+        for raw in (m.group(1), m.group(2)):
+            s = raw.lower().replace(",", "").strip()
+            vals.append(float(s[:-1].strip()) * 1000.0 if s.endswith("k") else float(s))
+        if 20_000 <= vals[0] <= vals[1] <= 2_500_000:
+            return f"${int(vals[0]):,} - ${int(vals[1]):,} USD"
+    except ValueError:
+        pass
+    return None
+
+
 @app.get("/", tags=["System"])
 async def root() -> dict[str, Any]:
     """Welcome metadata endpoint for direct browser visits."""
     return {
         "status": "ok",
-        "service": "StoreIntel B2B Intelligence API",
-        "version": "1.0.0",
+        "service": "StoreIntel B2B & E-Commerce Intelligence API",
+        "version": "2.0.0",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": ["/v1/shopify/inspect", "/v1/skool/inspect", "/v1/domain/contacts"],
+        "endpoints": [
+            "/v1/shopify/inspect",
+            "/v1/shopify/app-reviews",
+            "/v1/skool/inspect",
+            "/v1/domain/contacts",
+            "/v1/ats/jobs",
+            "/v1/yc/company",
+            "/v1/wordpress/plugin",
+            "/v1/substack/posts",
+        ],
     }
 
 
 @app.get("/health", tags=["System"])
 async def health() -> dict[str, str]:
     """Liveness endpoint for Render and API uptime monitors."""
-    return {"status": "ok", "service": "StoreIntel B2B Intelligence API", "version": "1.0.0"}
+    return {"status": "ok", "service": "StoreIntel B2B Intelligence API", "version": "2.0.0"}
 
 
 @app.get("/v1/shopify/inspect", tags=["E-Commerce Intelligence"], dependencies=[Depends(verify_rapidapi_secret)])
@@ -260,16 +399,14 @@ async def inspect_shopify_store(
     if theme_match:
         theme_name = theme_match.group(1)
 
-    installed_apps = [name for name, rx in SHOPIFY_APP_SIGNATURES if rx.search(html)]
+    installed_apps = _detect_patterns(html, SHOPIFY_APP_SIGNATURES)
     emails, socials = _extract_emails_and_socials(html)
 
     products: list[dict[str, Any]] = []
-    products_url = f"{origin}/products.json?limit={limit}"
     try:
-        prod_resp = await _safe_get(products_url)
+        prod_resp = await _safe_get(f"{origin}/products.json?limit={limit}")
         if prod_resp.status_code == 200:
-            payload = prod_resp.json()
-            for item in payload.get("products", [])[:limit]:
+            for item in prod_resp.json().get("products", [])[:limit]:
                 variant = (item.get("variants") or [{}])[0]
                 image = (item.get("images") or [{}])[0].get("src", "")
                 handle = item.get("handle") or ""
@@ -314,13 +451,32 @@ async def inspect_shopify_store(
     }
 
 
+@app.get("/v1/shopify/app-reviews", tags=["SaaS Churn Intelligence"], dependencies=[Depends(verify_rapidapi_secret)])
+async def get_shopify_app_reviews(
+    app_slug: str = Query(..., description="Shopify App handle or apps.shopify.com URL", examples=["klaviyo-email-marketing"]),
+    rating: int = Query(1, ge=1, le=5, description="Filter reviews by star rating (1 = churn leads)"),
+    limit: int = Query(20, ge=1, le=50, description="Max reviews to return"),
+) -> dict[str, Any]:
+    """Extract competitor 1-star to 5-star reviews & frustrated merchant leads from the Shopify App Store."""
+    handle = _safe_slug(app_slug)
+    url = f"https://apps.shopify.com/{handle}/reviews?ratings%5B%5D={rating}&sort_by=newest&page=1"
+    resp = await _safe_get(url)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Shopify App Store returned HTTP {resp.status_code} for '{handle}'.")
+
+    reviews = _parse_shopify_app_reviews(resp.text[:MAX_HTML_BYTES], handle, limit)
+    return {
+        "app_handle": handle,
+        "source_url": url,
+        "rating_filter": rating,
+        "count": len(reviews),
+        "reviews": reviews,
+    }
+
+
 @app.get("/v1/skool/inspect", tags=["Creator Economy"], dependencies=[Depends(verify_rapidapi_secret)])
 async def inspect_skool_community(
-    slug_or_url: str = Query(
-        ...,
-        description="Skool community slug or full skool.com URL (e.g. ai-automation-agency)",
-        examples=["ai-automation-agency"],
-    ),
+    slug_or_url: str = Query(..., description="Skool community slug (or 'discovery') or full skool.com URL", examples=["ai-automation-agency"]),
 ) -> dict[str, Any]:
     """Calculate estimated Skool community MRR/ARR and extract founder metadata & social links."""
     raw = slug_or_url.strip()
@@ -375,10 +531,10 @@ async def extract_domain_contacts(
     html = resp.text[:MAX_HTML_BYTES]
     parsed = urlparse(str(resp.url))
     title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
-    page_title = re.sub(r"\s+", " ", title_match.group(1)).strip()[:160] if title_match else ""
+    page_title = re.sub(r"\s+", " ", unescape(title_match.group(1))).strip()[:160] if title_match else ""
 
     emails, socials = _extract_emails_and_socials(html)
-    tech_stack = [name for name, rx in TECH_STACK_PATTERNS if rx.search(html)]
+    tech_stack = _detect_patterns(html, WEB_STACK_PATTERNS)
 
     return {
         "final_url": str(resp.url),
@@ -389,3 +545,271 @@ async def extract_domain_contacts(
         "tech_stack": tech_stack,
     }
 
+
+@app.get("/v1/ats/jobs", tags=["Hiring & Tech Stack Intent"], dependencies=[Depends(verify_rapidapi_secret)])
+async def inspect_ats_jobs(
+    board_url: str = Query(
+        ...,
+        description="Greenhouse, Lever, or Ashby job board URL or company slug (e.g. https://boards.greenhouse.io/stripe)",
+        examples=["https://boards.greenhouse.io/stripe"],
+    ),
+    limit: int = Query(20, ge=1, le=50, description="Max job postings to inspect"),
+) -> dict[str, Any]:
+    """Fetch open roles from Greenhouse, Lever, or AshbyHQ with salary ranges and B2B tech stack signals."""
+    raw = board_url.strip()
+    low = raw.lower()
+    hint = "greenhouse" if "greenhouse.io" in low else ("lever" if "lever.co" in low else ("ashby" if "ashbyhq.com" in low else ""))
+    slug = _safe_slug(raw, strip_prefix="boards")
+    if hint == "" and "jobs.lever.co" in low:
+        hint = "lever"
+
+    providers = [hint] if hint else ["greenhouse", "lever", "ashby"]
+    jobs: list[dict[str, Any]] = []
+    detected_ats = ""
+
+    for ats in providers:
+        if ats == "greenhouse":
+            resp = await _safe_get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
+            if resp.status_code == 200:
+                raw_jobs = resp.json().get("jobs", [])
+                if isinstance(raw_jobs, list):
+                    detected_ats = "greenhouse"
+                    for j in raw_jobs[:limit]:
+                        title = str(j.get("title") or "")
+                        desc = _clean_html_text(j.get("content"))
+                        loc = (j.get("location") or {}).get("name") if isinstance(j.get("location"), dict) else None
+                        depts = j.get("departments") or []
+                        dept = depts[0].get("name") if depts and isinstance(depts[0], dict) else None
+                        jobs.append({
+                            "title": title,
+                            "department": dept,
+                            "location": loc,
+                            "is_remote": bool((loc and "remote" in loc.lower()) or "remote" in title.lower()),
+                            "salary": _extract_salary(desc),
+                            "tech_stack": _detect_patterns(f"{title} {desc}", ATS_STACK_PATTERNS),
+                            "job_url": j.get("absolute_url"),
+                        })
+                    break
+        elif ats == "lever":
+            resp = await _safe_get(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+            if resp.status_code == 200 and isinstance(resp.json(), list):
+                detected_ats = "lever"
+                for j in resp.json()[:limit]:
+                    title = str(j.get("text") or "")
+                    cats = j.get("categories") if isinstance(j.get("categories"), dict) else {}
+                    loc = cats.get("location")
+                    desc = f"{j.get('descriptionPlain') or ''} {j.get('additionalPlain') or ''}".strip()
+                    jobs.append({
+                        "title": title,
+                        "department": cats.get("department") or cats.get("team"),
+                        "location": loc,
+                        "is_remote": bool(str(j.get("workplaceType") or "").lower() == "remote" or (loc and "remote" in str(loc).lower())),
+                        "salary": _extract_salary(desc),
+                        "tech_stack": _detect_patterns(f"{title} {desc}", ATS_STACK_PATTERNS),
+                        "job_url": j.get("hostedUrl") or j.get("applyUrl"),
+                    })
+                break
+        elif ats == "ashby":
+            resp = await _safe_get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true")
+            if resp.status_code == 200 and isinstance(resp.json().get("jobs"), list):
+                detected_ats = "ashby"
+                for j in resp.json()["jobs"][:limit]:
+                    title = str(j.get("title") or "")
+                    desc = str(j.get("descriptionPlain") or _clean_html_text(j.get("descriptionHtml")))
+                    comp = j.get("compensation") if isinstance(j.get("compensation"), dict) else {}
+                    sal = comp.get("scrapeableCompensationSalarySummary") or _extract_salary(desc)
+                    jobs.append({
+                        "title": title,
+                        "department": j.get("department") or j.get("team"),
+                        "location": j.get("location"),
+                        "is_remote": bool(j.get("isRemote") or str(j.get("workplaceType") or "").lower() == "remote"),
+                        "salary": sal,
+                        "tech_stack": _detect_patterns(f"{title} {desc}", ATS_STACK_PATTERNS),
+                        "job_url": j.get("jobUrl") or j.get("applyUrl"),
+                    })
+                break
+
+    if not detected_ats:
+        raise HTTPException(status_code=404, detail=f"No Greenhouse, Lever, or Ashby job board found for '{slug}'.")
+
+    stack_freq: dict[str, int] = {}
+    for job in jobs:
+        for tech in job["tech_stack"]:
+            stack_freq[tech] = stack_freq.get(tech, 0) + 1
+
+    return {
+        "company_slug": slug,
+        "ats_platform": detected_ats,
+        "jobs_returned": len(jobs),
+        "company_tech_stack_signals": sorted(stack_freq.keys(), key=lambda k: -stack_freq[k]),
+        "jobs": jobs,
+    }
+
+
+@app.get("/v1/yc/company", tags=["Startup & Founder Intelligence"], dependencies=[Depends(verify_rapidapi_secret)])
+async def inspect_yc_company(
+    slug: str = Query(..., description="Y Combinator company slug or URL (e.g. supabase, stripe)", examples=["supabase"]),
+) -> dict[str, Any]:
+    """Extract Y Combinator startup profile, batch, headcount, and founders' LinkedIn/X URLs."""
+    company_slug = _safe_slug(slug, strip_prefix="companies")
+    resp = await _safe_get(f"https://www.ycombinator.com/companies/{company_slug}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=404, detail=f"YC company '{company_slug}' not found (HTTP {resp.status_code}).")
+
+    match = re.search(r'data-page="([^"]+)"', resp.text[:MAX_HTML_BYTES])
+    if not match:
+        raise HTTPException(status_code=404, detail=f"Could not extract YC structured metadata for '{company_slug}'.")
+
+    comp = json.loads(unescape(match.group(1))).get("props", {}).get("company")
+    if not isinstance(comp, dict) or not comp.get("slug"):
+        raise HTTPException(status_code=404, detail=f"YC company payload empty for '{company_slug}'.")
+
+    founders = []
+    for f in comp.get("founders") or []:
+        if isinstance(f, dict) and f.get("full_name"):
+            founders.append({
+                "full_name": f.get("full_name"),
+                "title": f.get("title") or "Founder",
+                "linkedin_url": f.get("linkedin_url"),
+                "twitter_url": f.get("twitter_url"),
+            })
+
+    return {
+        "company_slug": comp.get("slug"),
+        "company_name": comp.get("name"),
+        "batch_name": comp.get("batch_name") or comp.get("batch"),
+        "status": comp.get("ycdc_status"),
+        "team_size": comp.get("team_size"),
+        "website": comp.get("website"),
+        "one_liner": comp.get("one_liner"),
+        "location": comp.get("location") or comp.get("city"),
+        "tags": comp.get("tags") or [],
+        "company_linkedin_url": comp.get("linkedin_url"),
+        "company_twitter_url": comp.get("twitter_url"),
+        "founders": founders,
+    }
+
+
+@app.get("/v1/wordpress/plugin", tags=["WordPress Ecosystem"], dependencies=[Depends(verify_rapidapi_secret)])
+async def inspect_wordpress_plugin(
+    slug: str = Query(..., description="WordPress.org plugin slug or URL (e.g. woocommerce, elementor)", examples=["woocommerce"]),
+) -> dict[str, Any]:
+    """Fetch WordPress.org plugin active installs, rating, support resolution rate, and developer metadata."""
+    plugin_slug = _safe_slug(slug, strip_prefix="plugins")
+    url = (
+        "https://api.wordpress.org/plugins/info/1.2/?action=plugin_information"
+        f"&request[slug]={plugin_slug}"
+        "&request[fields][short_description]=1"
+        "&request[fields][active_installs]=1"
+        "&request[fields][downloaded]=1"
+        "&request[fields][support_threads]=1"
+        "&request[fields][support_threads_resolved]=1"
+        "&request[fields][business_model]=1"
+        "&request[fields][commercial_support_url]=1"
+        "&request[fields][sections]=0&request[fields][versions]=0"
+    )
+    resp = await _safe_get(url)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"WordPress.org API returned HTTP {resp.status_code}.")
+
+    data = resp.json()
+    if not isinstance(data, dict) or not data.get("slug"):
+        raise HTTPException(status_code=404, detail=f"WordPress plugin '{plugin_slug}' not found.")
+
+    st_total = int(data.get("support_threads") or 0)
+    st_resolved = int(data.get("support_threads_resolved") or 0)
+    num_ratings = int(data.get("num_ratings") or 0)
+    rating_100 = data.get("rating")
+
+    return {
+        "slug": data.get("slug"),
+        "name": unescape(str(data.get("name") or plugin_slug)),
+        "version": data.get("version"),
+        "author": _clean_html_text(str(data.get("author") or "")),
+        "active_installs": data.get("active_installs"),
+        "downloaded": data.get("downloaded"),
+        "rating_5": round(float(rating_100) / 20.0, 2) if rating_100 is not None and num_ratings > 0 else None,
+        "num_ratings": num_ratings,
+        "support_threads": st_total,
+        "support_threads_resolved": st_resolved,
+        "support_resolution_rate_pct": round((st_resolved / st_total) * 100.0, 1) if st_total > 0 else None,
+        "last_updated": str(data.get("last_updated") or "")[:10],
+        "business_model": data.get("business_model"),
+        "commercial_support_url": data.get("commercial_support_url"),
+        "short_description": unescape(str(data.get("short_description") or "")),
+    }
+
+
+@app.get("/v1/substack/posts", tags=["Newsletter & Media Outreach"], dependencies=[Depends(verify_rapidapi_secret)])
+async def inspect_substack_posts(
+    subdomain: str = Query(..., description="Substack subdomain or newsletter URL (e.g. pragmaticengineer)", examples=["pragmaticengineer"]),
+    limit: int = Query(10, ge=1, le=25, description="Max recent posts to return"),
+) -> dict[str, Any]:
+    """Fetch Substack newsletter author profile, engagement averages, and recent posts via public API."""
+    s = subdomain.strip()
+    if not s:
+        raise HTTPException(status_code=400, detail="subdomain cannot be empty.")
+
+    if "://" in s or "." in s:
+        normalized = _validate_public_url(s)
+        host = urlparse(normalized).netloc.lower()
+        handle = host.replace(".substack.com", "")
+        base_url = f"https://{host}"
+    else:
+        handle = _safe_slug(s)
+        base_url = f"https://{handle}.substack.com"
+
+    qs = f"sort=new&limit={limit}"
+    resp = await _safe_get(f"{base_url}/api/v1/archive?{qs}")
+    if resp.status_code != 200 and ".substack.com" in base_url:
+        alt_base = f"https://www.{handle}.com"
+        resp2 = await _safe_get(f"{alt_base}/api/v1/archive?{qs}")
+        if resp2.status_code == 200:
+            resp = resp2
+            base_url = alt_base
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail=f"Could not fetch Substack archive for '{handle}'.")
+
+    raw_data = resp.json()
+    raw_posts = raw_data if isinstance(raw_data, list) else (raw_data.get("posts") if isinstance(raw_data, dict) else [])
+    posts: list[dict[str, Any]] = []
+    primary_author: dict[str, Any] = {}
+
+    for p in (raw_posts or [])[:limit]:
+        if not isinstance(p, dict):
+            continue
+        bylines = p.get("publishedBylines") if isinstance(p.get("publishedBylines"), list) else []
+        by0 = bylines[0] if bylines and isinstance(bylines[0], dict) else {}
+        if not primary_author and by0:
+            tw = by0.get("twitter_screen_name")
+            primary_author = {
+                "name": by0.get("name"),
+                "handle": by0.get("handle"),
+                "bio": by0.get("bio"),
+                "twitter_x": f"https://x.com/{tw}" if tw else None,
+            }
+        posts.append({
+            "title": p.get("title"),
+            "subtitle": p.get("subtitle"),
+            "published_at": p.get("post_date"),
+            "audience": p.get("audience") or "everyone",
+            "reaction_count": int(p.get("reaction_count") or 0),
+            "comment_count": int(p.get("comment_count") or 0),
+            "restack_count": int(p.get("restacks") or 0),
+            "word_count": int(p.get("wordcount") or 0),
+            "post_url": p.get("canonical_url") or f"{base_url}/p/{p.get('slug')}",
+        })
+
+    avg_react = round(sum(x["reaction_count"] for x in posts) / len(posts), 1) if posts else 0.0
+    avg_comm = round(sum(x["comment_count"] for x in posts) / len(posts), 1) if posts else 0.0
+
+    return {
+        "publication_handle": handle,
+        "publication_url": base_url,
+        "primary_author": primary_author,
+        "posts_returned": len(posts),
+        "avg_reactions": avg_react,
+        "avg_comments": avg_comm,
+        "posts": posts,
+    }
