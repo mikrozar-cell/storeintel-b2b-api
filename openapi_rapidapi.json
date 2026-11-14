@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://YOUR-RENDER-SERVICE.onrender.com",
-      "description": "Production Render Backend (replace with your live Render URL after deploy)"
+      "url": "https://storeintel-b2b-api.onrender.com",
+      "description": "Production Render Backend"
     }
   ],
   "paths": {

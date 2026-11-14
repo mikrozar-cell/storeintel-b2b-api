@@ -219,6 +219,19 @@ def _extract_skool_group(group: dict[str, Any], fallback_url: str) -> dict[str, 
     }
 
 
+@app.get("/", tags=["System"])
+async def root() -> dict[str, Any]:
+    """Welcome metadata endpoint for direct browser visits."""
+    return {
+        "status": "ok",
+        "service": "StoreIntel B2B Intelligence API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health",
+        "endpoints": ["/v1/shopify/inspect", "/v1/skool/inspect", "/v1/domain/contacts"],
+    }
+
+
 @app.get("/health", tags=["System"])
 async def health() -> dict[str, str]:
     """Liveness endpoint for Render and API uptime monitors."""
